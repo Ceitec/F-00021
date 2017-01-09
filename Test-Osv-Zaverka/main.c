@@ -254,7 +254,9 @@ int main(void)
 
     while(1)
     {
- 		process_timer_100Hz();
+ 		//Úplnì vynechali
+		 #warning ":-O"
+		//process_timer_100Hz();
  		uart0_process();
  		try_receive_data();
     }

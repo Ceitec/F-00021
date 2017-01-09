@@ -56,8 +56,11 @@ volatile Tuartflags uart0_flags = {0};
 /******************************************************/
 byte uart_rx_size(void)
 {
-	#warning "Tato fce upravena"
-  return ((uart0_buf_rx_ptr_e - uart0_buf_rx_ptr_b) & UART0_BUFFER_LINEAR_SIZE_MAX);
+	uint8_t tmp;
+	cli();
+	tmp = ((uart0_buf_rx_ptr_e - uart0_buf_rx_ptr_b) & UART0_BUFFER_LINEAR_SIZE_MAX);
+	sei();
+	return tmp;
 }
 
 byte uart_tx_size(void)
@@ -67,8 +70,11 @@ byte uart_tx_size(void)
 
 byte uart_rx_empty(void)
 {
-	#warning "Tato fce upravena"
-  return (uart0_buf_rx_ptr_e == uart0_buf_rx_ptr_b);
+	uint8_t tmp;
+	cli();
+	tmp = (uart0_buf_rx_ptr_e == uart0_buf_rx_ptr_b);
+	sei();
+	return tmp;
 }
 
 void uart_tx_flush(void)
@@ -78,8 +84,9 @@ void uart_tx_flush(void)
 
 void uart_rx_flush(void)
 {
-	#warning "Tato fce upravena"
-  uart0_buf_rx_ptr_b = uart0_buf_rx_ptr_e;
+	cli();
+	uart0_buf_rx_ptr_b = uart0_buf_rx_ptr_e;
+	sei();
 }
 
 byte uart_pac_rx_empty(void)
@@ -108,16 +115,20 @@ char uart_get_char(void)
 {
   // read     -> b++, read *b
   // interrupt safe -> read *(b+1); b++
-  byte ptr;
-  byte res;
+	byte ptr;
+	byte res;
   
-  if (uart_rx_empty()) return 0;
-	#warning "Tato fce upravena"
-  ptr = (uart0_buf_rx_ptr_b+1) & UART0_BUFFER_LINEAR_SIZE_MAX;
-  res = uart0_buf_rx[ptr];
-  uart0_buf_rx_ptr_b = ptr;
-	#warning "Tato fce upravena"
-  return res;
+	if (uart_rx_empty()) return 0;
+	
+	cli();
+	
+	ptr = (uart0_buf_rx_ptr_b+1) & UART0_BUFFER_LINEAR_SIZE_MAX;
+	res = uart0_buf_rx[ptr];
+	uart0_buf_rx_ptr_b = ptr;
+	
+	sei();
+	
+	return res;
   
 }
 
@@ -195,7 +206,6 @@ void uart_interrupt_tx(byte enable)
 /******************************
 **         Interrupt         **
 ******************************/
-uint8_t Prvni=1;
 /******************************************************/
 //
 /******************************************************/
@@ -204,11 +214,11 @@ ISR(UART0_PROC_RX_vect)
 	
   byte tmpDat;
   byte tmpStatus;
+  tmpDat = UART0_PROC_UDR;
   
   uart0_rx_timeout = UART0_TIMEOUT;
   tmpStatus = UART0_PROC_UCSRA;
   uart0_status |= tmpStatus;
-  tmpDat = UART0_PROC_UDR;
   uart_receive_char(tmpDat);
 }
 
@@ -251,8 +261,6 @@ void uart0_init(void)
 	UBRR = (((F_CPU) / (UART0_DEFAULT_BAUD*16UL))-1+(F_CPU%(UART0_DEFAULT_BAUD*16UL)>(UART0_DEFAULT_BAUD*8UL)?1:0));
 	UART0_PROC_UBRRH = (unsigned char)(UBRR >> 8);
 	UART0_PROC_UBRRL = (unsigned char)(UBRR);
-	
-	//UART0_PROC_UCSRA;
 	UART0_PROC_UCSRB |= BV(UART0_PROC_TXEN) | BV(UART0_PROC_RXEN) | BV(UART0_PROC_RXCIE); /* tx/rx enable */
 		
 
@@ -263,66 +271,86 @@ void uart0_init(void)
 
 //----------------------------------------------------------
 // process internal logic
+
+volatile uint8_t pom=99;
+
 void uart0_process(void)
 {
-  byte i;
-  byte iptr;
-  byte sum;
-  byte *ptr;
-  // pøedává zpravy na odvysílání z paketového do lineárního bufferu
-  if (!uart_pac_tx_empty()) {
-	  
-    // jsou data k odesláni ?
-    if ((!uart0_flags.txing)) {
-      // nevysíláme ?
-      // zaèneme vysílat další zprávu
-      iptr = (uart0_buf_pac_tx_ptr_b+1) & UART0_BUFFER_PACKET_SIZE_MAX;
-      ptr = (byte *) &(uart0_buf_pac_tx[iptr].b[0]);
-      for (i=0; i<9; i++) {
-        uart0_buf_tx[i] = *ptr;
-        ptr++;
-      }
-      uart0_buf_pac_tx_ptr_b = iptr;
-      uart0_buf_tx_ptr = 0;
-      uart_send();
-    }
-  }
+	static uint16_t rxTimeout = 0;
+	#define RXTIMEOUT_CYCLES	50000
+	byte i;
+	byte iptr;
+	byte sum;
+	byte *ptr;
+	// pøedává zpravy na odvysílání z paketového do lineárního bufferu
+	if (!uart_pac_tx_empty())
+	{
+		// jsou data k odesláni ?
+		if ((!uart0_flags.txing))
+		{
+			// nevysíláme ?
+			// zaèneme vysílat další zprávu
+			iptr = (uart0_buf_pac_tx_ptr_b+1) & UART0_BUFFER_PACKET_SIZE_MAX;
+			ptr = (byte *) &(uart0_buf_pac_tx[iptr].b[0]);
+			for (i=0; i<9; i++)
+			{
+				uart0_buf_tx[i] = *ptr;
+				ptr++;
+			}
+			uart0_buf_pac_tx_ptr_b = iptr;
+			uart0_buf_tx_ptr = 0;
+			uart_send();
+		}
+	}
 	
-  #warning "Tato fce upravena, zde je pøidáno"
-  if ((!uart0_flags.data_received) && (uart_rx_size() > 8)) {
-    // máme alespoò 9 bytù dat a nejsou nezpracovaná data?
+	// timeout uartu - omezeni maximalni doby prijmu
+	if (uart_rx_size() > 0 && uart_rx_size() <= 8) {
+		rxTimeout++;
+		if (rxTimeout > RXTIMEOUT_CYCLES) {
+			rxTimeout = 0;
+			uart_rx_flush();
+		}
+	}
 
-	#warning "Tato fce upravena"
+	//Kontroluje pøijatá data
+	if ((!uart0_flags.data_received) && (uart_rx_size() > 8))
+	{
+		// máme alespoò 9 bytù dat a nejsou nezpracovaná data?
+		rxTimeout = 0;
 
+	    // zjístíme adresu volného místa v paketovém pøijímacm bufferu
+		iptr = (uart0_buf_pac_rx_ptr_e+1) & UART0_BUFFER_PACKET_SIZE_MAX;
+		ptr = (byte *) &(uart0_buf_pac_rx[iptr].b[0]);
 
-    // zjístíme adresu volného místa v paketovém pøijímacm bufferu
-    iptr = (uart0_buf_pac_rx_ptr_e+1) & UART0_BUFFER_PACKET_SIZE_MAX;
-    ptr = (byte *) &(uart0_buf_pac_rx[iptr].b[0]);
-
-	#warning "Tato fce upravena"
-	
-	
-	
-    // pøedáme do paketového pøijímacího bufferu
-    for(i=0; i<9; i++) {
-      *ptr = uart_get_char();
-      ptr++;
-      //uart0_buf_pac_rx[0].b[i] = uart_get_char(); 
-    }
-    // odpovídá kontrolní souèet?
-    sum = 0;
-    for(i=0; i<8; i++) {
-      sum += uart0_buf_pac_rx[iptr].b[i];
-    }
-    if (sum == uart0_buf_pac_rx[iptr].b[8]) {
-      // souèet v poøádku
-      uart0_flags.data_received = TRUE; 
-      uart0_buf_pac_rx_ptr_e = iptr;
-
-     } else {
-      uart0_flags.data_receive_error = TRUE;
-    }
-  }
+		if (pom==255)
+		{
+			pom=iptr;
+		}
+		
+		// pøedáme do paketového pøijímacího bufferu
+		for(i=0; i<9; i++)
+		{
+			*ptr = uart_get_char();
+			ptr++;
+			//uart0_buf_pac_rx[0].b[i] = uart_get_char(); 
+		}
+		// odpovídá kontrolní souèet?
+		sum = 0;
+		for(i=0; i<8; i++)
+		{
+			sum += uart0_buf_pac_rx[iptr].b[i];
+		}
+		if (sum == uart0_buf_pac_rx[iptr].b[8])
+		{
+			// souèet v poøádku
+			uart0_flags.data_received = TRUE; 
+			uart0_buf_pac_rx_ptr_e = iptr;
+		}
+		else
+		{
+			uart0_flags.data_receive_error = TRUE;
+		}
+	}
 
 }
 
